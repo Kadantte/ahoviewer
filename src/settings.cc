@@ -19,29 +19,30 @@ SettingsManager::SettingsManager()
       m_BooruPath(Glib::build_filename(m_ConfigPath, "booru")),
       m_FavoriteTagsPath(Glib::build_filename(m_ConfigPath, "favorite-tags")),
       // Defaults {{{
-      m_DefaultBools({
-          { "AutoOpenArchive", true },    { "MangaMode", true },
-          { "RememberLastFile", true },   { "RememberLastSavePath", true },
-          { "SaveImageTags", false },     { "SaveThumbnails", true },
-          { "StartFullscreen", false },   { "StoreRecentFiles", true },
-          { "SmartNavigation", false },   { "BooruBrowserVisible", true },
-          { "MenuBarVisible", true },     { "ScrollbarsVisible", true },
-          { "StatusBarVisible", true },   { "ThumbnailBarVisible", false },
-          { "HideAll", false },           { "HideAllFullscreen", true },
-          { "RememberWindowSize", true }, { "RememberWindowPos", true },
-          { "ShowTagTypeHeaders", true }, { "AutoHideInfoBox", true },
-      }),
+      m_DefaultBools({ { "AutoOpenArchive", true },    { "MangaMode", true },
+                       { "RememberLastFile", true },   { "RememberLastSavePath", true },
+                       { "SaveImageTags", false },     { "SaveThumbnails", true },
+                       { "StartFullscreen", false },   { "StoreRecentFiles", true },
+                       { "SmartNavigation", false },   { "BooruBrowserVisible", true },
+                       { "MenuBarVisible", true },     { "ScrollbarsVisible", true },
+                       { "StatusBarVisible", true },   { "ThumbnailBarVisible", false },
+                       { "HideAll", false },           { "HideAllFullscreen", true },
+                       { "RememberWindowSize", true }, { "RememberWindowPos", true },
+                       { "ShowTagTypeHeaders", true }, { "AutoHideInfoBox", true },
+                       { "AskDeleteConfirm", true },   { "UseRGBAVisual", false } }),
       m_DefaultInts({ { "ArchiveIndex", -1 },
                       { "CacheSize", 2 },
                       { "SlideshowDelay", 5 },
                       { "CursorHideDelay", 2 },
-                      { "TagViewPosition", 520 },
+                      { "TagViewPosition", -1 },
                       { "SelectedBooru", 0 },
                       { "BooruLimit", 50 },
                       { "BooruWidth", -1 },
                       { "Volume", 50 },
                       { "ScrollPosH", -1 },
-                      { "ScrollPosV", -1 } }),
+                      { "ScrollPosV", -1 },
+                      { "YandereTagsVersion", 0 },
+                      { "KonachanTagsVersion", 0 } }),
       m_DefaultStrings({
           { "TitleFormat", "[%i / %c] %f - %p" },
           { "AudioSink", "fakesink" },
@@ -61,6 +62,7 @@ SettingsManager::SettingsManager()
           { "File",
             {
                 { "OpenFile", "<Primary>o" },
+                { "DeleteImage", "<Shift>Delete" },
                 { "Preferences", "p" },
                 { "Close", "<Primary>w" },
                 { "Quit", "<Primary>q" },
@@ -236,7 +238,7 @@ std::vector<std::shared_ptr<Site>>& SettingsManager::get_sites()
                 {
 #ifdef HAVE_LIBPEAS
                     const auto& plugins{
-                        Application::get_instance().get_plugin_manager().get_site_plugins()
+                        Application::get_default()->get_plugin_manager().get_site_plugins()
                     };
                     auto it{ std::find_if(
                         plugins.cbegin(), plugins.cend(), [&plugin_name](const auto& p) {
@@ -251,6 +253,8 @@ std::vector<std::shared_ptr<Site>>& SettingsManager::get_sites()
                     {
                         std::cerr << "Previously saved site '" << name
                                   << "' uses a plugin that is no longer installed" << std::endl;
+                        m_DisabledSites.emplace_back(
+                            name, url, username, password, type, use_samples, plugin_name);
                         continue;
                     }
 #else  // !HAVE_LIBPEAS
@@ -440,7 +444,7 @@ void SettingsManager::load_keybindings()
                 if (i.first == "Plugins")
                 {
                     const auto& plugins{
-                        Application::get_instance().get_plugin_manager().get_window_plugins()
+                        Application::get_default()->get_plugin_manager().get_window_plugins()
                     };
                     for (auto& p : plugins)
                     {
@@ -502,6 +506,28 @@ void SettingsManager::save_sites()
 #ifdef HAVE_LIBPEAS
         if (s->get_type() == Type::PLUGIN)
             set("plugin_name", s->get_plugin_name(), Setting::TypeString, site);
+#endif // HAVE_LIBPEAS
+    }
+
+    for (const auto& s : m_DisabledSites)
+    {
+        Setting& site{ sites.add(Setting::TypeGroup) };
+        auto [name, url, username, password, type, use_samples, plugin_name] = s;
+
+        set("name", name, Setting::TypeString, site);
+        set("url", url, Setting::TypeString, site);
+        set("type", static_cast<int>(type), Setting::TypeInt, site);
+
+        if (!username.empty())
+            set("username", username, Setting::TypeString, site);
+#if !defined(HAVE_LIBSECRET) && !defined(_WIN32)
+        if (!password.empty())
+            set("password", password, Setting::TypeString, site);
+#endif // !defined(HAVE_LIBSECRET) && !defined(_WIN32)
+        set("use_samples", use_samples, Setting::TypeBoolean, site);
+#ifdef HAVE_LIBPEAS
+        if (type == Type::PLUGIN)
+            set("plugin_name", plugin_name, Setting::TypeString, site);
 #endif // HAVE_LIBPEAS
     }
 }

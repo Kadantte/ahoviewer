@@ -26,8 +26,14 @@ Browser::Browser(BaseObjectType* cobj, const Glib::RefPtr<Gtk::Builder>& bldr)
 
     // Make the booru browser borders a little less ugly
     auto css{ Gtk::CssProvider::create() };
-    css->load_from_data("#BooruBrowserNotebook{border-right-width:0;border-bottom-width:0;}");
-    m_Notebook->get_style_context()->add_provider(css, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    css->load_from_data("#BooruBrowserNotebook{border-right-width:0;border-bottom-width:0;} "
+                        "#BooruBrowserNotebook scrolledwindow{margin:1px;}");
+    get_style_context()->add_provider_for_screen(
+        Gdk::Screen::get_default(), css, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    // XXX: Gtk3 bug? if you set it to 0.0 without setting it previously it's set to 0.1? instead
+    m_TagEntry->set_progress_fraction(1.0);
+    m_TagEntry->set_progress_fraction(0.0);
 
     m_TagEntry->signal_key_press_event().connect(
         sigc::mem_fun(*this, &Browser::on_entry_key_press_event), false);
@@ -52,8 +58,9 @@ Browser::Browser(BaseObjectType* cobj, const Glib::RefPtr<Gtk::Builder>& bldr)
     m_Notebook->signal_page_removed().connect(sigc::mem_fun(*this, &Browser::on_page_removed));
     m_Notebook->signal_page_added().connect(sigc::mem_fun(*this, &Browser::on_page_added));
 
-    // This essentially sets the minimum size to match 2 columns of a pages icon view
-    m_Notebook->set_size_request((Image::BooruThumbnailSize + IconViewItemPadding * 2) * 2, -1);
+    // This sets the minimum size to match 3 columns of a pages icon view
+    // 2 = border+margin size (1px each)
+    m_Notebook->set_size_request((Image::BooruThumbnailSize + 2 + IconViewItemPadding * 2) * 3, -1);
 
     g_signal_connect(m_Notebook->gobj(), "create-window", G_CALLBACK(on_create_window), this);
 
@@ -280,7 +287,16 @@ void Browser::on_realize()
     while (Glib::MainContext::get_default()->pending())
         Glib::MainContext::get_default()->iteration(true);
 
-    set_position(Settings.get_int("TagViewPosition"));
+    auto pos{ Settings.get_int("TagViewPosition") };
+    // default value, set the actual tagview height to either 350px or
+    // 25% of the height of the booru browser, whichever is larger
+    if (pos == -1)
+    {
+        auto height{ get_allocation().get_height() };
+        pos = std::max(static_cast<int>(height * 0.75), height - 350);
+    }
+
+    set_position(pos);
 
     get_window()->thaw_updates();
 
@@ -297,7 +313,7 @@ void Browser::on_realize()
     });
 }
 
-void Browser::on_show()
+void Browser::on_show() // NOLINT
 {
     Gtk::Paned::on_show();
     Page* page = get_active_page();
@@ -319,7 +335,9 @@ void Browser::search(const bool new_tab)
     }
 
     m_TagView->clear();
-    get_active_page()->search(get_active_site());
+    auto page{ get_active_page() };
+
+    page->search(get_active_site());
 }
 
 void Browser::close_page(Page* page)
@@ -370,7 +388,7 @@ void Browser::on_image_progress(const Image* bimage, double c, double t)
 
 GtkNotebook* Browser::on_create_window(GtkNotebook*, GtkWidget*, gint x, gint y, gpointer*)
 {
-    auto window{ Application::get_instance().create_window() };
+    auto window{ Application::get_default()->create_window() };
 
     if (window)
     {
@@ -441,6 +459,12 @@ void Browser::save_image_as()
     }
 }
 
+void Browser::reset_tag_entry_progress()
+{
+    m_PostsDownloadPulseConn.disconnect();
+    m_TagEntry->set_progress_fraction(0.0);
+}
+
 bool Browser::on_entry_key_press_event(GdkEventKey* e)
 {
     // we only care if enter/return was pressed while shift or no modifier was down
@@ -488,6 +512,7 @@ void Browser::on_page_removed(Gtk::Widget* w, guint)
     if (m_Notebook->get_n_pages() == 0)
     {
         m_TagEntry->set_text("");
+        m_TagEntry->set_progress_fraction(0.0);
         m_TagView->show_favorite_tags();
         m_InfoBox->clear();
         m_SaveImagesButton->set_sensitive(false);
@@ -496,6 +521,11 @@ void Browser::on_page_removed(Gtk::Widget* w, guint)
         m_ImageProgConn.disconnect();
         m_ImageListConn.disconnect();
         m_DownloadErrorConn.disconnect();
+        m_PostsDownloadStartedConn.disconnect();
+        m_PostsDownloadFinishedConn.disconnect();
+        m_PostsOnLastPageConn.disconnect();
+        m_PostsLoadProgressConn.disconnect();
+        m_PostsDownloadPulseConn.disconnect();
 
         m_StatusBar->clear_progress(StatusBar::Priority::SAVE);
         m_StatusBar->clear_message(StatusBar::Priority::SAVE);
@@ -573,12 +603,41 @@ void Browser::on_switch_page(Gtk::Widget* w, guint)
         bimage = std::static_pointer_cast<Image>(page->get_imagelist()->get_current());
 
     m_DownloadErrorConn.disconnect();
-    m_DownloadErrorConn = page->signal_no_results().connect(
-        [&](const std::string msg) { m_StatusBar->set_message(msg); });
+    m_DownloadErrorConn = page->signal_no_results().connect([&](const std::string msg) {
+        m_TagEntry->set_progress_fraction(0.0);
+        m_PostsDownloadPulseConn.disconnect();
+        m_StatusBar->set_message(msg);
+    });
 
     m_ImageListConn.disconnect();
     m_ImageListConn = page->get_imagelist()->signal_changed().connect(
         sigc::mem_fun(*this, &Browser::on_imagelist_changed));
+
+    m_TagEntry->set_progress_fraction(0.0);
+    m_PostsDownloadStartedConn.disconnect();
+    m_PostsDownloadStartedConn = page->signal_posts_download_started().connect([&]() {
+        reset_tag_entry_progress();
+        m_PostsDownloadPulseConn = Glib::signal_timeout().connect(
+            [&]() {
+                m_TagEntry->progress_pulse();
+                return !!page;
+            },
+            50);
+    });
+
+    m_PostsDownloadFinishedConn.disconnect();
+    m_PostsDownloadFinishedConn = page->get_imagelist()->signal_thumbnails_loaded().connect(
+        sigc::mem_fun(*this, &Browser::reset_tag_entry_progress));
+    m_PostsOnLastPageConn.disconnect();
+    m_PostsOnLastPageConn = page->signal_on_last_page().connect(
+        sigc::mem_fun(*this, &Browser::reset_tag_entry_progress));
+
+    m_PostsLoadProgressConn.disconnect();
+    m_PostsLoadProgressConn =
+        page->get_imagelist()->signal_load_progress().connect([&](size_t c, size_t t) {
+            m_PostsDownloadPulseConn.disconnect();
+            m_TagEntry->set_progress_fraction(static_cast<double>(c) / t);
+        });
 
     if (!check_saving_page())
     {

@@ -30,6 +30,8 @@ namespace AhoViewer
         void restore_last_file();
         void get_drawable_area_size(int& w, int& h) const;
 
+        bool has_rgba_visual() const { return m_HasRGBAVisual; }
+
     protected:
         void on_realize() override;
         void on_check_resize() override;
@@ -63,6 +65,8 @@ namespace AhoViewer
 
         void on_connect_proxy(const Glib::RefPtr<Gtk::Action>& action, Gtk::Widget* w);
 
+        static void on_screen_changed(GtkWidget* w, GdkScreen* prev, gpointer userp);
+
         // Action callbacks {{{
         void on_open_file_dialog();
         void on_show_preferences();
@@ -85,10 +89,13 @@ namespace AhoViewer
         void on_toggle_slideshow();
         void on_save_image();
         void on_save_image_as();
+        void on_delete_image();
         // }}}
 
         static PreferencesDialog* m_PreferencesDialog;
         static Gtk::AboutDialog* m_AboutDialog;
+        static Gtk::MessageDialog* m_AskDeleteConfirmDialog;
+        static Gtk::CheckButton* m_AskDeleteConfirmCheckButton;
 
         Glib::RefPtr<Gtk::Builder> m_Builder;
         Glib::RefPtr<Gtk::ActionGroup> m_ActionGroup;
@@ -114,7 +121,7 @@ namespace AhoViewer
             // if it was set manually before fullscreening
             m_WasHideAll{ false },
             // Tracks whether this was the only window at one point
-            m_OriginalWindow{ false }, m_IsMinimized{ false };
+            m_OriginalWindow{ false }, m_IsMinimized{ false }, m_HasRGBAVisual{ false };
 
         std::shared_ptr<ImageList> m_ActiveImageList, m_LocalImageList;
         sigc::connection m_ImageListConn, m_ImageListClearedConn;

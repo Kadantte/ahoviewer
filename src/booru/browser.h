@@ -87,6 +87,7 @@ namespace AhoViewer
             bool check_saving_page();
             void connect_image_signals(const std::shared_ptr<Image> bimage);
             void save_image_as();
+            void reset_tag_entry_progress();
 
             std::shared_ptr<Site> get_active_site() const
             {
@@ -123,7 +124,8 @@ namespace AhoViewer
             std::vector<sigc::connection> m_SiteIconConns;
             sigc::connection m_ComboChangedConn, m_DownloadErrorConn, m_ImageListConn,
                 m_ImageProgConn, m_ImageErrorConn, m_PosChangedConn, m_SaveProgConn,
-                m_PageSwitchedConn;
+                m_PageSwitchedConn, m_PostsDownloadStartedConn, m_PostsDownloadFinishedConn,
+                m_PostsDownloadPulseConn, m_PostsLoadProgressConn, m_PostsOnLastPageConn;
 
             SignalPageChangedType m_SignalPageChanged;
             sigc::signal<void> m_SignalEntryBlur;

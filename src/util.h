@@ -42,7 +42,7 @@ namespace AhoViewer
 
     namespace Booru
     {
-        static const int IconViewItemPadding{ 6 };
+        static const int IconViewItemPadding{ 2 };
         struct PostInfo
         {
             PostInfo(std::string date, std::string source, std::string rating, std::string score)
@@ -121,5 +121,12 @@ namespace AhoViewer
 
         std::string format_date_time(const date::sys_seconds t);
         std::string get_rating_string(std::string_view rating);
+    }
+
+    namespace Util
+    {
+        std::wstring utf8_to_utf16(const std::string& s);
+        std::string utf16_to_utf8(const std::wstring& s);
+        std::string null_check_string(const gchar* s);
     }
 }

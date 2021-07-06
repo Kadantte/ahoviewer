@@ -7,7 +7,7 @@ conf.set_quoted('PACKAGE', meson.project_name())
 conf.set_quoted('PACKAGE_URL', project_url)
 conf.set_quoted('PACKAGE_BUGREPORT', project_bugreport)
 
-ahoviewer_cpp_args = [ ]
+ahoviewer_cpp_args = [ '-Wno-attributes' ]
 
 deps = [
   threads, glibmm, sigcpp, gtkmm, libconfig, libxml, curl,
@@ -54,18 +54,32 @@ if libpeas.found()
   ]
 
   # Dummy executable that gir needs
-  gir_dummy = executable(
-    'gir_dummy',
-    sources : [
-      plugin_sources,
-      'plugin/gir-dummy.c',
-    ],
-    c_args : [ '-DGIR_DUMMY' ],
-    dependencies : [ libpeas, gtk ],
-    install : false,
-  )
+  if host_machine.system() == 'windows'
+    gir_dummy = executable(
+      'gir_dummy',
+      sources : [
+	plugin_sources,
+	'plugin/gir-dummy.c',
+      ],
+      c_args : [ '-DGIR_DUMMY' ],
+      dependencies : [ libpeas, gtk ],
+      link_args: [ '-Wl,--export-all-symbols' ],
+      install : false,
+    )
+  else
+    gir_dummy = executable(
+      'gir_dummy',
+      sources : [
+	plugin_sources,
+	'plugin/gir-dummy.c',
+      ],
+      c_args : [ '-DGIR_DUMMY' ],
+      dependencies : [ libpeas, gtk ],
+      install : false,
+    )
+  endif
 
-  gnome.generate_gir(
+  ahoviewer_gir = gnome.generate_gir(
     gir_dummy,
     sources : [
       plugin_sources,
@@ -80,10 +94,15 @@ if libpeas.found()
     ],
     symbol_prefix : 'ahoviewer',
     identifier_prefix : 'Ahoviewer',
+    link_with: gir_dummy,
     install : true,
+    extra_args: [
+      '--warn-all',
+    ],
   )
 
   sources += [
+    ahoviewer_gir,
     'plugin/siteactivatable.c',
     'plugin/windowabstract.c',
     'plugin/manager.cc',
@@ -97,39 +116,41 @@ if libsecret.found()
   conf.set('HAVE_LIBSECRET', 1)
 endif
 
-if libunrar.found()
+if libunrar_found
   conf.set('HAVE_LIBUNRAR', 1)
-  if libunrar_dll_hpp
-    conf.set('HAVE_LIBUNRAR_DLL_HPP', 1)
-  elif unrar_dll_hpp
-    conf.set('HAVE_UNRAR_DLL_HPP', 1)
-  endif
+  incdirs += include_directories(unrar_incdir)
 endif
 
 if libzip.found()
   conf.set('HAVE_LIBZIP', 1)
 endif
 
-configure_file(
-  output : 'config.h',
-  configuration : conf
-)
-
 # Falls back to project version when there's no .git directory, but still outputs a "fatal" error
 # message (which can just be ignored since it doesn't actually stop the configuring process)
-vcs_tag(
+version_h = vcs_tag(
   command : ['git', 'describe', '--dirty'],
   input : 'version.h.in',
-  output : 'version.h'
+  output : 'version.h',
 )
+deps += declare_dependency(sources: version_h)
 
 resources = gnome.compile_resources(
   'resources', 'ahoviewer.gresource.xml'
 )
 
 if host_machine.system() == 'windows'
-  resources += import('windows').compile_resources('ahoviewer.rc')
+  ahoviewer_rc = configure_file(
+      input : 'ahoviewer.rc.in',
+      output : 'ahoviewer.rc',
+      configuration : version_data,
+    )
+  resources += import('windows').compile_resources(ahoviewer_rc)
 endif
+
+configure_file(
+  output : 'config.h',
+  configuration : conf,
+)
 
 sources += [
   resources,
@@ -180,6 +201,6 @@ ahoviewer = executable(
   cpp_args : ahoviewer_cpp_args,
   dependencies : deps,
   include_directories : incdirs,
-  gui_app : true,
+  gui_app : get_option('buildtype').startswith('release'),
   install : true,
 )

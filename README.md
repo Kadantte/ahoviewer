@@ -1,4 +1,4 @@
-# ahoviewer
+# ahoviewer [![Donate with Bitcoin](https://en.cryptobadges.io/badge/micro/37ggEUusb22afoougFbJ3bPqQJTMH3i7ht)](https://en.cryptobadges.io/donate/37ggEUusb22afoougFbJ3bPqQJTMH3i7ht) [![Donate with Ethereum](https://en.cryptobadges.io/badge/micro/0x6CA30E3208bC5f70E8F24bE1171Ece6dB5799A8e)](https://en.cryptobadges.io/donate/0x6CA30E3208bC5f70E8F24bE1171Ece6dB5799A8e)
 
 A GTK image viewer, manga reader, and booru browser.
 
@@ -33,7 +33,7 @@ sudo ninja install
 
 If you don't want to compile with debug symbols replace the first command with:
 ```
-meson build -Dbuildtype=release
+meson build --buildtype=release
 ```
 
 ## Usage
@@ -51,7 +51,8 @@ or
 Some example and usable plugins can be found at [ahodesuka/ahoviewer-plugins](https://github.com/ahodesuka/ahoviewer-plugins)
 
 Plugins should be installed into `$XDG_DATA_HOME/ahoviewer/plugins`, `$XDG_DATA_HOME` is `~/.local/share` by default.
-The .typelib file that is compiled must be installed via ninja install, or you will need to set the
+This is `%LOCALAPPDATA%\ahoviewer\plugins` on Windows.
+The .typelib file that is compiled must be installed via `ninja install`, or you will need to set the
 `GI_TYPELIB_PATH` environment variable to the directory where it is located after compilation.
 
 ### FAQ
@@ -91,7 +92,9 @@ The .typelib file that is compiled must be installed via ninja install, or you w
 | Toggle Slideshow                          | s               |
 | New Booru Browser Tab                     | Control+t       |
 | Save Booru Browser Tab                    | Control+Shift+s |
-| Save Current Booru Image                  | Control+s       |
+| Save Image                                | Shift+s         |
+| Save Image As                             | Control+s       |
+| Delete Image                              | Shift+Delete    |
 | Open Booru Post in Web Browser            | Control+Shift+o |
 | Copy Booru Post URL to Clipboard          | Control+y       |
 | Copy Booru Image URL to Clipboard         | y               |

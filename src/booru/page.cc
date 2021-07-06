@@ -67,6 +67,7 @@ Page::Page()
         sigc::mem_fun(*this, &Page::on_value_changed));
 
     m_IconView->set_column_spacing(0);
+    m_IconView->set_row_spacing(0);
     m_IconView->set_margin(0);
     m_IconView->set_item_padding(IconViewItemPadding);
 
@@ -293,11 +294,14 @@ void Page::get_posts()
                 {
                     xml::Document doc{ reinterpret_cast<char*>(m_Curler.get_data()),
                                        m_Curler.get_data_size() };
-                    std::string posts_count{ doc.get_children()[0].get_value() };
-                    // Usually when you use a wildcard operator danbooru's count api will return a
-                    // blank value here (blank but contains some whitespace and newlines)
-                    if (posts_count.find_first_not_of(" \n\r") != std::string::npos)
-                        m_PostsCount = std::stoul(posts_count);
+                    if (doc.get_n_nodes())
+                    {
+                        std::string posts_count{ doc.get_children()[0].get_value() };
+                        // Usually when you use a wildcard operator danbooru's count api will return
+                        // a blank value here (blank but contains some whitespace and newlines)
+                        if (posts_count.find_first_not_of(" \n\r") != std::string::npos)
+                            m_PostsCount = std::stoul(posts_count);
+                    }
                 }
                 catch (const std::runtime_error& e)
                 {
@@ -350,6 +354,8 @@ void Page::get_posts()
         if (!m_Curler.is_cancelled())
             m_SignalPostsDownloaded();
     });
+
+    m_SignalPostsDownloadStarted();
 }
 
 bool Page::get_next_page()
@@ -406,6 +412,8 @@ void Page::on_posts_downloaded()
         {
             if (m_Page == 1)
                 m_SignalDownloadError(_("No results found"));
+            else
+                m_SignalOnLastPage();
 
             m_LastPage = true;
         }

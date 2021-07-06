@@ -17,26 +17,29 @@ using namespace AhoViewer;
 #include <glibmm/i18n.h>
 #include <iomanip>
 #include <iostream>
+#include <string_view>
 #include <utility>
 
 extern const char* const ahoviewer_version;
 
 PreferencesDialog* MainWindow::m_PreferencesDialog{ nullptr };
 Gtk::AboutDialog* MainWindow::m_AboutDialog{ nullptr };
+Gtk::MessageDialog* MainWindow::m_AskDeleteConfirmDialog{ nullptr };
+Gtk::CheckButton* MainWindow::m_AskDeleteConfirmCheckButton{ nullptr };
 
 MainWindow::MainWindow(BaseObjectType* cobj, Glib::RefPtr<Gtk::Builder> bldr)
     : Gtk::ApplicationWindow{ cobj },
       m_Builder{ std::move(bldr) },
       m_LastSavePath{ Settings.get_string("LastSavePath") }
 {
+    if (!m_PreferencesDialog)
+        m_Builder->get_widget_derived("PreferencesDialog", m_PreferencesDialog);
+
     m_Builder->get_widget_derived("ThumbnailBar", m_ThumbnailBar);
     m_Builder->get_widget_derived("Booru::Browser", m_BooruBrowser);
     m_Builder->get_widget_derived("Booru::Browser::InfoBox", m_InfoBox);
     m_Builder->get_widget_derived("ImageBox", m_ImageBox);
     m_Builder->get_widget_derived("StatusBar", m_StatusBar);
-
-    if (!m_PreferencesDialog)
-        m_Builder->get_widget_derived("PreferencesDialog", m_PreferencesDialog);
 
     m_Builder->get_widget("MainWindow::HPaned", m_HPaned);
     m_HPaned->property_position().signal_changed().connect([&]() {
@@ -57,6 +60,11 @@ MainWindow::MainWindow(BaseObjectType* cobj, Glib::RefPtr<Gtk::Builder> bldr)
     m_Builder->get_widget_derived("Booru::Browser::TagView", m_TagView);
 
     m_UIManager = Glib::RefPtr<Gtk::UIManager>::cast_static(m_Builder->get_object("UIManager"));
+
+    create_actions();
+
+    g_signal_connect(this->gobj(), "screen-changed", G_CALLBACK(on_screen_changed), this);
+    on_screen_changed(GTK_WIDGET(this->gobj()), nullptr, this);
 
     m_LocalImageList = std::make_shared<ImageList>(m_ThumbnailBar);
     m_LocalImageList->signal_archive_error().connect(
@@ -126,7 +134,7 @@ MainWindow::MainWindow(BaseObjectType* cobj, Glib::RefPtr<Gtk::Builder> bldr)
 
         m_AboutDialog->set_name(PACKAGE);
         m_AboutDialog->set_version(ahoviewer_version);
-        m_AboutDialog->set_copyright(u8"Copyright \u00A9 2013-2020 ahoka");
+        m_AboutDialog->set_copyright(u8"Copyright \u00A9 2013-2021 ahoka");
         m_AboutDialog->set_website(PACKAGE_URL);
         m_AboutDialog->set_website_label(PACKAGE_URL);
         m_AboutDialog->add_credit_section(_("Created by"), { "ahoka" });
@@ -140,6 +148,19 @@ MainWindow::MainWindow(BaseObjectType* cobj, Glib::RefPtr<Gtk::Builder> bldr)
     }
     // }}}
 
+    // Used when deleting files and AskDeleteConfirm is true
+    if (!m_AskDeleteConfirmDialog)
+    {
+        m_Builder->get_widget("AskDeleteConfirmDialog", m_AskDeleteConfirmDialog);
+        m_AskDeleteConfirmDialog->signal_response().connect(
+            [&](const int) { m_AskDeleteConfirmDialog->hide(); });
+
+        m_Builder->get_widget("AskDeleteConfirmDialog::CheckButton", m_AskDeleteConfirmCheckButton);
+
+        m_PreferencesDialog->signal_ask_delete_confirm_changed().connect(
+            [&](bool v) { m_AskDeleteConfirmCheckButton->set_active(v); });
+    }
+
     // Setup drag and drop
     drag_dest_set({ Gtk::TargetEntry("text/uri-list") },
                   Gtk::DEST_DEFAULT_ALL,
@@ -147,8 +168,6 @@ MainWindow::MainWindow(BaseObjectType* cobj, Glib::RefPtr<Gtk::Builder> bldr)
 
     // Call this to make sure it is rendered in the main thread.
     Image::get_missing_pixbuf();
-
-    create_actions();
 
     // Restore window geometry
     int x, y, w, h;
@@ -298,8 +317,9 @@ void MainWindow::get_drawable_area_size(int& w, int& h) const
     if (m_ThumbnailBar->get_visible())
         w -= m_ThumbnailBar->get_width();
 
+    // +1 = the paned handle min-width
     if (m_BooruBrowser->get_visible())
-        w -= m_HPaned->get_position() + m_HPaned->get_handle_window()->get_width();
+        w -= m_HPaned->get_position() + 1;
 
     if (m_MenuBar->get_visible())
         h -= m_MenuBar->get_height();
@@ -486,10 +506,11 @@ void MainWindow::save_window_geometry()
     if (is_fullscreen())
         return;
 
-    int x = m_LastXPos, y = m_LastYPos, w, h;
+    int x{ m_LastXPos }, y{ m_LastYPos }, w, h;
 
     get_size(w, h);
     // On Windows this will always return -32000, -32000 when minimized
+    // XXX: Is this still the case with gtk3?
     if (!m_IsMinimized)
     {
         get_position(x, y);
@@ -529,10 +550,10 @@ void MainWindow::create_actions()
         Gtk::Action::create("OpenFile", Gtk::Stock::OPEN, _("_Open File"), _("Open a file")),
         Gtk::AccelKey(Settings.get_keybinding("File", "OpenFile")),
         sigc::mem_fun(*this, &MainWindow::on_open_file_dialog));
-    m_ActionGroup->add(Gtk::Action::create("Preferences",
-                                           Gtk::Stock::PREFERENCES,
-                                           _("_Preferences"),
-                                           _("Open the preferences dialog")),
+    m_ActionGroup->add(Gtk::Action::create_with_icon_name("Preferences",
+                                                          "preferences-system",
+                                                          _("_Preferences"),
+                                                          _("Open the preferences dialog")),
                        Gtk::AccelKey(Settings.get_keybinding("File", "Preferences")),
                        sigc::mem_fun(*this, &MainWindow::on_show_preferences));
     m_ActionGroup->add(
@@ -616,10 +637,15 @@ void MainWindow::create_actions()
             "SaveImage", Gtk::Stock::SAVE, _("Save Image"), _("Save the selected image")),
         Gtk::AccelKey(Settings.get_keybinding("BooruBrowser", "SaveImage")),
         sigc::mem_fun(*this, &MainWindow::on_save_image));
+    m_ActionGroup->add(Gtk::Action::create_with_icon_name(
+                           "SaveImages", "document-save-all", _("Save Images"), _("Save Images")),
+                       Gtk::AccelKey(Settings.get_keybinding("BooruBrowser", "SaveImages")),
+                       sigc::mem_fun(m_BooruBrowser, &Booru::Browser::on_save_images));
     m_ActionGroup->add(
-        Gtk::Action::create("SaveImages", Gtk::Stock::SAVE, _("Save Images"), _("Save Images")),
-        Gtk::AccelKey(Settings.get_keybinding("BooruBrowser", "SaveImages")),
-        sigc::mem_fun(m_BooruBrowser, &Booru::Browser::on_save_images));
+        Gtk::Action::create_with_icon_name(
+            "DeleteImage", "edit-delete", _("Delete Image"), _("Delete the selected image")),
+        Gtk::AccelKey(Settings.get_keybinding("File", "DeleteImage")),
+        sigc::mem_fun(*this, &MainWindow::on_delete_image));
 
     m_ActionGroup->add(
         Gtk::Action::create("ViewPost",
@@ -832,10 +858,6 @@ void MainWindow::create_actions()
     // Add the accel group to the window.
     add_accel_group(m_ActionGroup->get_accel_group());
 
-    // Finally attach the menubar to the main window's grid
-    Gtk::Grid* grid{ nullptr };
-    m_Builder->get_widget("MainWindow::Grid", grid);
-
     m_MenuBar = static_cast<Gtk::MenuBar*>(m_UIManager->get_widget("/MenuBar"));
     m_MenuBar->set_hexpand();
 
@@ -844,7 +866,7 @@ void MainWindow::create_actions()
     auto plugins_menu{ Gtk::make_managed<Gtk::Menu>() };
     plugins_menuitem->set_submenu(*plugins_menu);
 
-    for (auto& p : Application::get_instance().get_plugin_manager().get_window_plugins())
+    for (auto& p : Application::get_default()->get_plugin_manager().get_window_plugins())
     {
         if (p->get_action_name().empty())
             continue;
@@ -865,7 +887,12 @@ void MainWindow::create_actions()
         m_MenuBar->insert(*plugins_menuitem, 3);
 #endif // HAVE_LIBPEAS
 
-    grid->attach(*m_MenuBar, 0, 0, 2, 1);
+    // Finally pack the menubar into the main window's box
+    Gtk::Box* box{ nullptr };
+    m_Builder->get_widget("MainWindow::Box", box);
+    box->pack_start(*m_MenuBar, false, true);
+    // pack_start doesn't seem to put the menu bar at the top of the box, so it needs to be moved
+    box->reorder_child(*m_MenuBar, 0);
 }
 
 void MainWindow::update_widgets_visibility()
@@ -891,6 +918,8 @@ void MainWindow::update_widgets_visibility()
                                      m_ActionGroup->get_action("ToggleThumbnailBar"))
                                      ->get_active();
 
+    get_window()->freeze_updates();
+
     m_MenuBar->set_visible(!hide_all && menu_bar_visible);
     m_StatusBar->set_visible(!hide_all && status_bar_visible);
     // The scrollbars are independent of the hideall setting
@@ -900,8 +929,13 @@ void MainWindow::update_widgets_visibility()
     m_ThumbnailBar->set_visible(!hide_all && thumbnail_bar_visible && !booru_browser_visible &&
                                 !m_LocalImageList->empty());
 
+    while (Glib::MainContext::get_default()->pending())
+        Glib::MainContext::get_default()->iteration(true);
+
     m_ImageBox->queue_draw_image();
     set_sensitives();
+
+    get_window()->thaw_updates();
 }
 
 void MainWindow::set_sensitives()
@@ -909,20 +943,20 @@ void MainWindow::set_sensitives()
     bool hide_all{ Glib::RefPtr<Gtk::ToggleAction>::cast_static(
                        m_ActionGroup->get_action("ToggleHideAll"))
                        ->get_active() };
-    static constexpr std::array ui_names{
+    static constexpr std::array<std::string_view, 3> ui_names{
         "ToggleMenuBar",
         "ToggleStatusBar",
         "ToggleBooruBrowser",
     };
 
-    for (const std::string& s : ui_names)
-        m_ActionGroup->get_action(s)->set_sensitive(!hide_all);
+    for (const auto s : ui_names)
+        m_ActionGroup->get_action(s.data())->set_sensitive(!hide_all);
 
-    static constexpr std::array action_names{
+    static constexpr std::array<std::string_view, 5> action_names{
         "NextImage", "PreviousImage", "FirstImage", "LastImage", "ToggleSlideshow",
     };
 
-    for (const std::string& s : action_names)
+    for (const auto s : action_names)
     {
         bool sens{ m_ActiveImageList && !m_ActiveImageList->empty() };
 
@@ -931,7 +965,7 @@ void MainWindow::set_sensitives()
         else if (s == "PreviousImage")
             sens = sens && m_ActiveImageList->can_go_previous();
 
-        m_ActionGroup->get_action(s)->set_sensitive(sens);
+        m_ActionGroup->get_action(s.data())->set_sensitive(sens);
     }
 
     const Booru::Page* page{ m_BooruBrowser->get_active_page() };
@@ -949,6 +983,8 @@ void MainWindow::set_sensitives()
     m_ActionGroup->get_action("SaveImageAs")->set_sensitive(save);
     m_ActionGroup->get_action("SaveImages")
         ->set_sensitive(booru && !page->get_imagelist()->empty());
+    m_ActionGroup->get_action("DeleteImage")
+        ->set_sensitive(local && !m_ActiveImageList->from_archive());
     m_ActionGroup->get_action("ViewPost")->set_sensitive(booru && !page->get_imagelist()->empty());
     m_ActionGroup->get_action("CopyImageURL")
         ->set_sensitive(booru && !page->get_imagelist()->empty());
@@ -1106,6 +1142,32 @@ void MainWindow::on_connect_proxy(const Glib::RefPtr<Gtk::Action>& action, Gtk::
     }
 }
 
+void MainWindow::on_screen_changed(GtkWidget* w, GdkScreen*, gpointer userp)
+{
+    auto self{ static_cast<MainWindow*>(userp) };
+    auto screen{ Gdk::Screen::get_default() };
+    auto visual{ screen->get_rgba_visual() };
+
+    if (!visual || !screen->is_composited() || !Settings.get_bool("UseRGBAVisual"))
+    {
+        visual                = screen->get_system_visual();
+        self->m_HasRGBAVisual = false;
+        MainWindow::m_PreferencesDialog->set_has_rgba_visual(false);
+    }
+    else
+    {
+        self->m_HasRGBAVisual = true;
+        MainWindow::m_PreferencesDialog->set_has_rgba_visual(true);
+
+        self->get_style_context()->remove_class("background");
+        self->m_MenuBar->get_style_context()->add_class("background");
+        self->m_StatusBar->get_style_context()->add_class("background");
+        self->m_BooruBrowser->get_style_context()->add_class("background");
+    }
+
+    gtk_widget_set_visual(w, visual->gobj());
+}
+
 void MainWindow::on_open_file_dialog()
 {
     auto dialog{ Gtk::FileChooserNative::create("Open", *this, Gtk::FILE_CHOOSER_ACTION_OPEN) };
@@ -1165,7 +1227,7 @@ void MainWindow::on_open_file_dialog()
         std::string path{ m_LocalImageList->from_archive()
                               ? m_LocalImageList->get_archive().get_path()
                               : m_LocalImageList->get_current()->get_path() };
-        dialog->set_filename(path);
+        dialog->set_current_folder(Glib::path_get_dirname(path));
     }
 
     if (dialog->run() == Gtk::RESPONSE_ACCEPT)
@@ -1261,7 +1323,7 @@ void MainWindow::on_quit()
         { "ToggleThumbnailBar", "ThumbnailBarVisible" },
     } };
 
-    for (auto w : widget_vis)
+    for (auto& w : widget_vis)
     {
         bool v{ Glib::RefPtr<Gtk::ToggleAction>::cast_static(m_ActionGroup->get_action(w.first))
                     ->get_active() };
@@ -1497,4 +1559,28 @@ void MainWindow::on_save_image_as()
     {
         save_image_as();
     }
+}
+
+void MainWindow::on_delete_image()
+{
+    if (Settings.get_bool("AskDeleteConfirm"))
+    {
+        auto text{ Glib::ustring::compose(
+            _("Are you sure that you want to delete '%1'?"),
+            Glib::path_get_basename(m_ActiveImageList->get_current()->get_filename())) };
+
+        m_AskDeleteConfirmDialog->set_message(text);
+        m_AskDeleteConfirmDialog->property_transient_for() =
+            static_cast<Gtk::Window*>(get_toplevel());
+        // Set the default focus to the yes button
+        m_AskDeleteConfirmDialog->get_widget_for_response(Gtk::RESPONSE_YES)->grab_focus();
+
+        if (m_AskDeleteConfirmDialog->run() != Gtk::RESPONSE_YES)
+            return;
+
+        Settings.set("AskDeleteConfirm", m_AskDeleteConfirmCheckButton->get_active());
+        m_PreferencesDialog->set_ask_delete_confirm(Settings.get_bool("AskDeleteConfirm"));
+    }
+
+    m_ActiveImageList->get_current()->trash();
 }

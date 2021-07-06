@@ -25,6 +25,10 @@ ImageBoxNote::ImageBoxNote(const Note& note)
     m_Popover.add(*label);
     m_Popover.set_modal(false);
     m_Popover.set_name("NotePopover");
+    m_Popover.signal_enter_notify_event().connect(
+        sigc::mem_fun(*this, &ImageBoxNote::on_enter_notify_event));
+    m_Popover.signal_leave_notify_event().connect(
+        sigc::mem_fun(*this, &ImageBoxNote::on_leave_notify_event));
 
     auto css      = Gtk::CssProvider::create();
     style_context = m_Popover.get_style_context();
@@ -32,10 +36,18 @@ ImageBoxNote::ImageBoxNote(const Note& note)
     css->load_from_resource("/ui/css/note-popover.css");
 }
 
+void ImageBoxNote::set_scale(const double scale)
+{
+    if (scale != m_Scale)
+    {
+        m_Scale = scale;
+        queue_resize();
+    }
+}
+
 Gtk::SizeRequestMode ImageBoxNote::get_request_mode_vfunc() const
 {
-    // Accept the default value supplied by the base class.
-    return Gtk::Widget::get_request_mode_vfunc();
+    return Gtk::SizeRequestMode::SIZE_REQUEST_CONSTANT_SIZE;
 }
 
 void ImageBoxNote::get_preferred_width_vfunc(int& minimum_width, int& natural_width) const
@@ -44,34 +56,17 @@ void ImageBoxNote::get_preferred_width_vfunc(int& minimum_width, int& natural_wi
     natural_width = m_Note.w * m_Scale;
 }
 
-void ImageBoxNote::get_preferred_height_for_width_vfunc(int,
-                                                        int& minimum_height,
-                                                        int& natural_height) const
-{
-    minimum_height = m_Note.h * m_Scale;
-    natural_height = m_Note.h * m_Scale;
-}
-
 void ImageBoxNote::get_preferred_height_vfunc(int& minimum_height, int& natural_height) const
 {
     minimum_height = m_Note.h * m_Scale;
     natural_height = m_Note.h * m_Scale;
 }
 
-void ImageBoxNote::get_preferred_width_for_height_vfunc(int,
-                                                        int& minimum_width,
-                                                        int& natural_width) const
-{
-    minimum_width = m_Note.w * m_Scale;
-    natural_width = m_Note.w * m_Scale;
-}
-
 void ImageBoxNote::on_size_allocate(Gtk::Allocation& allocation)
 {
     // Do something with the space that we have actually been given:
     //(We will not be given heights or widths less than we have requested,
-    // though
-    // we might get more)
+    // though we might get more)
 
     // Use the offered allocation for this container:
     set_allocation(allocation);
@@ -136,12 +131,26 @@ bool ImageBoxNote::on_draw(const Cairo::RefPtr<Cairo::Context>& cr)
 
 bool ImageBoxNote::on_enter_notify_event(GdkEventCrossing*)
 {
-    m_Popover.show();
+    // There's a chance that the popdown animation is playing and needs to be cancelled via hide
+    // before calling popup or else it will be ignored
+    if (!m_TimeoutConn)
+        m_Popover.hide();
+
+    m_TimeoutConn.disconnect();
+    m_Popover.popup();
+
     return true;
 }
 
-bool ImageBoxNote::on_leave_notify_event(GdkEventCrossing* e)
+bool ImageBoxNote::on_leave_notify_event(GdkEventCrossing*)
 {
-    m_Popover.hide();
+    // 200 millisecond delay on hiding the note popup
+    m_TimeoutConn = Glib::signal_timeout().connect(
+        [&]() {
+            m_Popover.popdown();
+            return false;
+        },
+        200);
+
     return true;
 }

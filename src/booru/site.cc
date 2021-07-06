@@ -235,7 +235,7 @@ Site::get_type_from_url(const std::string& url)
         else
         {
             for (const auto& site :
-                 Application::get_instance().get_plugin_manager().get_site_plugins())
+                 Application::get_default()->get_plugin_manager().get_site_plugins())
             {
                 auto uri{ site->get_test_uri() };
                 if (uri.empty())
@@ -323,12 +323,12 @@ Site::Site(std::string name,
         PCREDENTIALW pcred;
 
         std::string target = std::string(PACKAGE "/") + m_Name;
-        wchar_t* TargetName =
+        wchar_t* target_name =
             reinterpret_cast<wchar_t*>(g_utf8_to_utf16(target.c_str(), -1, NULL, NULL, NULL));
 
-        if (TargetName)
+        if (target_name)
         {
-            BOOL r = CredReadW(TargetName, CRED_TYPE_GENERIC, 0, &pcred);
+            BOOL r = CredReadW(target_name, CRED_TYPE_GENERIC, 0, &pcred);
 
             if (!r)
             {
@@ -337,21 +337,21 @@ Site::Site(std::string name,
             }
             else
             {
-                wchar_t* UserName = reinterpret_cast<wchar_t*>(
+                wchar_t* user_name = reinterpret_cast<wchar_t*>(
                     g_utf8_to_utf16(m_Username.c_str(), -1, NULL, NULL, NULL));
 
-                if (UserName)
+                if (user_name)
                 {
-                    if (wcscmp(pcred->UserName, UserName) == 0)
+                    if (wcscmp(pcred->UserName, user_name) == 0)
                         m_Password = (char*)pcred->CredentialBlob;
 
-                    g_free(UserName);
+                    g_free(user_name);
                 }
 
                 CredFree(pcred);
             }
 
-            g_free(TargetName);
+            g_free(target_name);
         }
     }
 #endif // _WIN32
@@ -374,15 +374,45 @@ Site::Site(std::string name,
         std::thread{ [&]() {
             using nlohmann::json;
             using nlohmann::detail::parse_error;
-            Curler curler{ m_Url + "/tag/summary.json", m_ShareHandle };
 
+            bool is_yandere{ m_Url.find("yande.re") != std::string::npos };
+            auto url{ m_Url + "/tag/summary.json?version=%1" };
+
+            if (Glib::file_test(m_TagsPath + "-types", Glib::FILE_TEST_EXISTS))
+                url = Glib::ustring::compose(
+                    url,
+                    Settings.get_int(is_yandere ? "YandereTagsVersion" : "KonachanTagsVersion"));
+            else
+                url = Glib::ustring::compose(url, 0);
+
+            Curler curler{ url, m_ShareHandle };
             if (curler.perform())
             {
                 try
                 {
-                    json j = json::parse(curler.get_data());
+                    json j = json::parse(curler.get_buffer());
 
-                    std::string data{ j["data"].get<std::string>() }, line;
+                    Settings.set(is_yandere ? "YandereTagsVersion" : "KonachanTagsVersion",
+                                 j["version"].get<int>());
+
+                    std::string data, line;
+
+                    // Load saved tag types
+                    if (j.contains("unchanged"))
+                    {
+                        std::ifstream ifs(m_TagsPath + "-types");
+                        if (ifs)
+                            data.assign((std::istreambuf_iterator<char>(ifs)),
+                                        std::istreambuf_iterator<char>());
+                    }
+                    else
+                    {
+                        data = j["data"].get<std::string>();
+
+                        std::ofstream ofs(m_TagsPath + "-types");
+                        ofs << data;
+                    }
+
                     std::istringstream iss{ data };
 
                     auto& types{ m_Url.find("yande.re") != std::string::npos ? yd_types
@@ -535,33 +565,33 @@ void Site::set_password(const std::string& s)
     if (!m_Username.empty())
     {
         std::string target = std::string(PACKAGE "/") + m_Name;
-        wchar_t* TargetName =
+        wchar_t* target_name =
             reinterpret_cast<wchar_t*>(g_utf8_to_utf16(target.c_str(), -1, NULL, NULL, NULL));
 
-        if (TargetName)
+        if (target_name)
         {
-            wchar_t* UserName = reinterpret_cast<wchar_t*>(
+            wchar_t* user_name = reinterpret_cast<wchar_t*>(
                 g_utf8_to_utf16(m_Username.c_str(), -1, NULL, NULL, NULL));
 
-            if (UserName)
+            if (user_name)
             {
                 CREDENTIALW cred        = { 0 };
                 cred.Type               = CRED_TYPE_GENERIC;
-                cred.TargetName         = TargetName;
+                cred.TargetName         = target_name;
                 cred.CredentialBlobSize = s.length();
                 cred.CredentialBlob     = (LPBYTE)s.c_str();
                 cred.Persist            = CRED_PERSIST_LOCAL_MACHINE;
-                cred.UserName           = UserName;
+                cred.UserName           = user_name;
 
                 BOOL r = CredWriteW(&cred, 0);
                 if (!r)
                     std::cerr << "Failed to set password for " << m_Name << std::endl
                               << " errno " << GetLastError() << std::endl;
 
-                g_free(UserName);
+                g_free(user_name);
             }
 
-            g_free(TargetName);
+            g_free(target_name);
         }
     }
 #endif // _WIN32
@@ -891,10 +921,9 @@ Site::parse_post_data(unsigned char* data, const size_t size)
                     if (has_notes)
                         notes_url = Glib::ustring::compose(m_Url + NotesURI.at(m_Type), id);
 
-                    // safebooru.org provides the wrong file extension for thumbnails
-                    // All their thumbnails are .jpg, but their api gives urls with the
-                    // same exntension as the original images exnteion
-                    if (thumb_url.find("safebooru.org") != std::string::npos)
+                    // Some older Gelbooru based sites have a bug where their thumbnail urls file
+                    // extension match the normal file extension even though all thumbnails are .jpg
+                    if (m_Type == Type::GELBOORU)
                         thumb_url = thumb_url.substr(0, thumb_url.find_last_of('.')) + ".jpg";
 
                     date::sys_seconds t;
@@ -993,14 +1022,18 @@ std::vector<Note> Site::parse_note_data(unsigned char* data, const size_t size) 
                     y    = std::stoi(n.get_attribute("y"));
                 }
 
-                // Remove all html tags
+                // Remove all html tags, replace line breaks with \n
                 std::string::size_type sp;
                 while ((sp = body.find('<')) != std::string::npos)
                 {
-                    std::string::size_type ep{ body.find('>') };
+                    std::string::size_type ep{ body.find('>', sp) };
                     if (ep == std::string::npos)
                         break;
-                    body.erase(sp, ep + 1 - sp);
+
+                    if (body.substr(sp, ep).find("<br") != std::string::npos)
+                        body.replace(sp, ep + 1 - sp, "\n");
+                    else
+                        body.erase(sp, ep + 1 - sp);
                 }
 
                 decode_html_entities_utf8(body.data(), nullptr);

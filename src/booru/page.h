@@ -30,6 +30,11 @@ namespace AhoViewer::Booru
         SignalClosedType signal_closed() const { return m_SignalClosed; }
         SignalDownloadErrorType signal_no_results() const { return m_SignalDownloadError; }
         SignalSaveProgressType signal_save_progress() const { return m_SignalSaveProgress; }
+        sigc::signal<void> signal_posts_download_started() const
+        {
+            return m_SignalPostsDownloadStarted;
+        }
+        sigc::signal<void> signal_on_last_page() const { return m_SignalOnLastPage; }
 
     protected:
         void set_pixbuf(const size_t index, const Glib::RefPtr<Gdk::Pixbuf>& pixbuf) override;
@@ -138,5 +143,6 @@ namespace AhoViewer::Booru
         SignalClosedType m_SignalClosed;
         SignalDownloadErrorType m_SignalDownloadError;
         SignalSaveProgressType m_SignalSaveProgress;
+        sigc::signal<void> m_SignalPostsDownloadStarted, m_SignalOnLastPage;
     };
 }

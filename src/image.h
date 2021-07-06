@@ -54,6 +54,8 @@ namespace AhoViewer
         unsigned int get_gif_frame_delay() const;
         void reset_gif_animation();
 
+        void trash();
+
         Glib::Dispatcher& signal_pixbuf_changed() { return m_SignalPixbufChanged; }
         Glib::Dispatcher& signal_notes_changed() { return m_SignalNotesChanged; }
 
@@ -96,6 +98,6 @@ namespace AhoViewer
         Glib::RefPtr<Gdk::Pixbuf> create_webm_thumbnail(int w, int h) const;
         void save_thumbnail(Glib::RefPtr<Gdk::Pixbuf>& pixbuf, const gchar* mime_type) const;
 
-        static const std::string ThumbnailDir;
+        static const std::string NormalThumbnailDir, LargeThumbnailDir;
     };
 }

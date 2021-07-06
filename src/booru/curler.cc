@@ -9,7 +9,18 @@ using namespace AhoViewer::Booru;
 #define VERBOSE_LIBCURL 0
 #endif
 
-const char* Curler::UserAgent{ "Mozilla/5.0" };
+const char* Curler::UserAgent
+{
+#if defined(__linux__)
+    "Mozilla/5.0 (Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0"
+#elif defined(__APPLE__)
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 11.4; rv:89.0) Gecko/20100101 Firefox/89.0"
+#elif defined(_WIN32)
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+#else
+    "Mozilla/5.0"
+#endif
+};
 
 size_t Curler::write_cb(const unsigned char* ptr, size_t size, size_t nmemb, void* userp)
 {
@@ -52,6 +63,10 @@ Curler::Curler(const std::string& url, CURLSH* share)
       m_Cancel(Gio::Cancellable::create())
 {
     curl_easy_setopt(m_EasyHandle, CURLOPT_USERAGENT, UserAgent);
+    // This will fall back to 1.1 if the server does not support HTTP 2
+    // Since curl 7.62.0 the default value is CURL_HTTP_VERSION_2TLS, but
+    // explicitly setting it here enables it for non https requests as well
+    curl_easy_setopt(m_EasyHandle, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2);
     curl_easy_setopt(m_EasyHandle, CURLOPT_WRITEFUNCTION, &Curler::write_cb);
     curl_easy_setopt(m_EasyHandle, CURLOPT_WRITEDATA, this);
     curl_easy_setopt(m_EasyHandle, CURLOPT_XFERINFOFUNCTION, &Curler::progress_cb);
@@ -68,7 +83,7 @@ Curler::Curler(const std::string& url, CURLSH* share)
     gchar* g{ g_win32_get_package_installation_directory_of_module(NULL) };
     if (g)
     {
-        std::string cert_path{ Glib::build_filename(g, "curl-ca-bundle.crt") };
+        std::string cert_path{ Glib::build_filename(g, "ca-bundle.crt") };
         curl_easy_setopt(m_EasyHandle, CURLOPT_CAINFO, cert_path.c_str());
         g_free(g);
     }

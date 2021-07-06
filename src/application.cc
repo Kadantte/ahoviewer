@@ -14,9 +14,14 @@ using namespace AhoViewer;
 #include <curl/curl.h>
 // This can be removed once it's implemented in C++20
 #include <date/tz.h>
+#include <future>
 #include <gtkmm.h>
 #include <iostream>
 #include <libxml/parser.h>
+
+#ifdef _WIN32
+#include <glib/gstdio.h>
+#endif // _WIN32
 
 #ifdef USE_OPENSSL
 #include <openssl/opensslv.h>
@@ -85,34 +90,6 @@ Application::Application()
 }
 #endif // HAVE_LIBPEAS
 {
-    // Disgusting win32 api to start dbus-daemon and make it close when
-    // the ahoviewer process ends
-#ifdef _WIN32
-    HANDLE job                                = CreateJobObject(NULL, NULL);
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = { 0 };
-    PROCESS_INFORMATION pi                    = { 0 };
-    STARTUPINFO si                            = { 0 };
-    char cmd[]                                = "dbus-daemon.exe --session";
-
-    jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
-    si.cb = sizeof(si);
-
-    if (CreateProcess(NULL,
-                      cmd,
-                      NULL,
-                      NULL,
-                      FALSE,
-                      CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_BREAKAWAY_FROM_JOB,
-                      NULL,
-                      NULL,
-                      &si,
-                      &pi))
-    {
-        AssignProcessToJobObject(job, pi.hProcess);
-        ResumeThread(pi.hThread);
-    }
-#endif // _WIN32
     // The ImageBox needs this, disabling it is silly unless proven otherwise
     Glib::setenv("GTK_OVERLAY_SCROLLING", "", true);
     Glib::set_application_name(PACKAGE);
@@ -120,10 +97,15 @@ Application::Application()
     signal_shutdown().connect(sigc::mem_fun(*this, &Application::on_shutdown));
 }
 
-Application& Application::get_instance()
+Glib::RefPtr<Application> Application::create()
 {
-    static Application app;
-    return app;
+    return Glib::RefPtr<Application>(new Application());
+}
+
+Glib::RefPtr<Application> Application::get_default()
+{
+    auto gapp{ Gtk::Application::get_default() };
+    return Glib::RefPtr<Application>::cast_dynamic(gapp);
 }
 
 MainWindow* Application::create_window()
@@ -150,21 +132,6 @@ MainWindow* Application::create_window()
     add_window(*window);
 
     return w;
-}
-
-int Application::run(int argc, char** argv)
-{
-    register_application();
-
-    if (!is_remote())
-    {
-        gtk_init(&argc, &argv);
-#ifdef HAVE_GSTREAMER
-        gst_init(&argc, &argv);
-#endif // HAVE_GSTREAMER
-    }
-
-    return Gtk::Application::run(argc, argv);
 }
 
 void Application::on_activate()
@@ -216,11 +183,18 @@ void Application::on_startup()
         init_gnutls_locks();
 #endif // defined(USE_GNUTLS) && GCRYPT_VERSION_NUMBER < 0x010600
 
-    Gtk::Main::init_gtkmm_internals();
-
     Gtk::Application::on_startup();
 
+#ifdef _WIN32
+    gchar* g{ g_win32_get_package_installation_directory_of_module(NULL) };
+    if (g)
+    {
+        date::set_install(Glib::build_filename(g, "tzdata"));
+        g_free(g);
+    }
+#else  // !_WIN32
     date::set_install(Glib::build_filename(Glib::get_user_cache_dir(), PACKAGE, "tzdata"));
+#endif // !_WIN32
     std::thread{ []() {
         try
         {
@@ -232,6 +206,31 @@ void Application::on_startup()
                       << std::endl;
         }
     } }.detach();
+
+#if _WIN32
+    // Detect if windows 10 dark theme is enabled and change to my dark theme
+    DWORD value = 0, value_size = sizeof(value);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                     L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     L"AppsUseLightTheme",
+                     RRF_RT_REG_DWORD,
+                     nullptr,
+                     &value,
+                     &value_size) == ERROR_SUCCESS)
+    {
+        auto gtk_settings{ Gtk::Settings::get_default() };
+
+        if (value == 0)
+        {
+            // ahoka-light is the default theme for Windows binary distribution
+            if (gtk_settings->property_gtk_theme_name() == "ahoka-light")
+                gtk_settings->property_gtk_theme_name() = "ahoka";
+
+            if (gtk_settings->property_gtk_icon_theme_name() == "ahoka-light")
+                gtk_settings->property_gtk_icon_theme_name() = "ahoka";
+        }
+    }
+#endif // _WIN32
 
     // Load this after plugins have been loaded so the active plugins can have their keybindings set
     Settings.load_keybindings();
@@ -266,6 +265,23 @@ void Application::on_window_removed(Gtk::Window* w)
 
 void Application::on_shutdown()
 {
+    std::vector<std::future<void>> futures;
     for (const std::shared_ptr<Booru::Site>& site : Settings.get_sites())
-        site->save_tags();
+        futures.push_back(std::async(std::launch::async, &Booru::Site::save_tags, site));
+
+#if _WIN32
+    // Clean up gdbus-nonce-file-XXXXXX
+    std::string tmp_dir{ Glib::get_tmp_dir() };
+
+    for (auto&& i : Glib::Dir(Glib::get_tmp_dir()))
+    {
+        std::string filename{ "gdbus-nonce-file-" };
+        // 6 = random characters
+        if (i.compare(0, filename.length(), filename) == 0 && i.length() == filename.length() + 6)
+            g_unlink(Glib::build_filename(tmp_dir, i).c_str());
+    }
+#endif // _WIN32
+
+    for (auto& f : futures)
+        f.get();
 }
